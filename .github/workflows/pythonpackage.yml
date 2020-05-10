@@ -1,39 +1,84 @@
-# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+from pykrx import stock
+from selenium import webdriver
+import bs4
+import datetime
+import pandas as pd
 
-name: Python package
+def news_finder(stock_list) : 
+    
+    for stock_id in stock_list :
+        stock_name = stock.get_market_ticker_name(stock_id)
+        
+        # 네이버 금융 뉴스 섹션에 접속
+        driver = webdriver.Chrome(executable_path="chromedriver.exe")
+        url = "https://finance.naver.com/news/"
+        driver.get(url)
+        
+        driver.find_element_by_xpath('//*[@id="newsMainTop"]/div/div[2]/form/div/input').click() # 검색창 초기화
+        driver.find_element_by_xpath('//*[@id="newsMainTop"]/div/div[2]/form/div/input').send_keys(stock_name) # 주식 이름 검색창에 입력
+        driver.find_element_by_xpath('//*[@id="newsMainTop"]/div/div[2]/form/div/a').click() # 검색 아이콘 클릭해서 실행
+        
+        now = datetime.datetime.now()
+        today_date = str(now.strftime('%Y-%m-%d'))
 
-on:
-  push:
-    branches: [ master ]
-  pull_request:
-    branches: [ master ]
+        result_url = driver.current_url
+        new_url = result_url + "&sm=title.basic&pd=4&stDateStart=2018-01-01&stDateEnd=" + today_date # 제목에서만 설정 & Start 날짜 직접 설정 가능!
+        driver.get(new_url)
+        
+        # 몇 페이지까지 존재하는지 알아보자.
+        bs_obj = bs4.BeautifulSoup(driver.page_source, "html.parser") # 뷰티풀숩 object 생성
+        last = bs_obj.find("td", {"class" : "pgRR"})
+        a = last.find('a', href=True)
+        last_page_num = int(a['href'].split('page=')[1])
+        
+        # last_page_num 개의 페이지 URL을 pages라는 리스트에 담아보자.
+        page_numbering = list(range(1,last_page_num + 1))
+        pages = []
+        for i in range(1, last_page_num) :
+            pages.append(new_url + "&page=" + str(i))
+            
+        
+        # 빈 데이터프레임 생성 
+        df = pd.DataFrame(columns=("date", "title", "content")) 
+        
+        # 빈 데이터프레임에 크롤링한 기사 본문 내용들을 채워넣기
+        for page in pages : 
+            driver.get(page)
+            bs_obj = bs4.BeautifulSoup(driver.page_source, "html.parser")
 
-jobs:
-  build:
+            # 깔끔한 작업을 위해 필요한 영역만 남기고 나머지는 무시하자
+            news_list = bs_obj.find("dl", {"class" : "newsList"})
+            news_titles_1 = news_list.find_all("dt", {"class" : "articleSubject"}) 
+            news_titles_2 = news_list.find_all("dd", {"class" : "articleSubject"}) # 네이버 뉴스는 썸네일이 있는 뉴스와 없는 뉴스의 태그가 다르게 설정되어 있네요.
+            news_titles = news_titles_1 + news_titles_2 # 그래서 작업을 2번 한 후에 합치는 방식을 썼습니다.
+            del news_titles_1, news_titles_2 # 필요없는 변수 제거
 
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: [3.5, 3.6, 3.7, 3.8]
 
-    steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v1
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install flake8 pytest
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-    - name: Lint with flake8
-      run: |
-        # stop the build if there are Python syntax errors or undefined names
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
-        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-    - name: Test with pytest
-      run: |
-        pytest
+            for title in news_titles :
+                temp = title.find('a', href=True)
+                news_url = "https://finance.naver.com" + temp['href']
+                driver.get(news_url) # 개별 뉴스들을 클릭하는 동작을 실행시킨다.
+                bs_obj = bs4.BeautifulSoup(driver.page_source, "html.parser")
+
+                # 기사 제목 크롤링
+                title = driver.find_element_by_xpath('//*[@id="contentarea_left"]/div[2]/div[1]/div[2]/h3').text
+
+                # 기사 업로드 날짜 크롤링
+                date = driver.find_element_by_xpath('//*[@id="contentarea_left"]/div[2]/div[1]/div[2]/div/span').text
+
+                # 기사 본문 크롤링
+                content = driver.find_element_by_xpath('//*[@id="content"]').text
+
+                df.loc[len(df)] = [date, title, content] # 빈 데이터프레임에 행 추가
+        
+        # id와 name이라는 column을 만들고 해당 값으로 동일하게 채워넣는다.
+        df['id'] = stock_id
+        df['name'] = stock_name     
+        
+        # 크롤링한 내용이 담겨 있는 데이터프레임을 CSV파일로 저장
+        file_name = stock_id + "_" + today_date + ".csv"
+        df.to_csv(file_name, encoding='utf-8-sig')
+        
+    print("모든 작업이 종료되었습니다.")
+    
+    
