@@ -90,7 +90,7 @@ class collect_data:
         stock_name = stock.get_market_ticker_name(stock_id)
 
         # 네이버 금융 뉴스 섹션에 접속
-        driver = webdriver.Chrome(executable_path="./source/chromedriver.exe")
+        driver = webdriver.Chrome(executable_path="./chromedriver.exe")
         url = "https://finance.naver.com/news/"
         driver.get(url)
 
